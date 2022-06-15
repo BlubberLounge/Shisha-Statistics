@@ -1,6 +1,8 @@
 var gateway = `ws://${window.location.hostname}/ws`;
 var websocket;
-var time, nextBatteryReadTime;
+var time;
+var nextBatteryReadTime;
+var lastTime = 0;
 
 window.addEventListener('load', onLoad);
 
@@ -26,17 +28,25 @@ function onClose(event)
 
 function onMessage(event)
 {
+    let string = "no data.";
+
     let data = JSON.parse(event.data);
+
+    let battery = data.battery;
+    let battery_voltage = battery.voltage > 0 ?  Math.round((battery.voltage + Number.EPSILON) * 100) / 100 + " v" : string;
+    let battery_percent = battery.percent > 0 ? battery.percent + " %" : string;
+
+    let airflow = data.airflow == 1  ? "High" : "none";
 
     // console.log(event);
     console.log(data);
 
-    document.getElementById('battery_voltage').innerHTML = data.battery_voltage > 0 ?  Math.round((data.battery_voltage + Number.EPSILON) * 100) / 100 + " v" : "no data.";
-    document.getElementById('battery_level').innerHTML = data.battery_level > 0 ? data.battery_level + " %" : "no data.";
-    document.getElementById('airflow').innerHTML = data.airflow == 1  ? "High" : "none";
+    document.getElementById('battery_voltage').innerHTML = battery_voltage;
+    document.getElementById('battery_level').innerHTML = battery_percent;
+    document.getElementById('airflow').innerHTML = airflow;
+    document.getElementById('timer').innerHTML = getTimerTime(data.startTimer, data.endTimer);
 
-    time = data.time;
-    nextBatteryReadTime = data.next_battery_read;
+    nextBatteryReadTime = new Date().getTime() + battery.nextRead;
 }
 
 
@@ -61,17 +71,26 @@ function updateCountdown()
 {
     var x = setInterval(function() {
         
-    var distance = nextBatteryReadTime - time;
-        
+    var distance = nextBatteryReadTime - new Date().getTime();
+
     var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
     var seconds = Math.floor((distance % (1000 * 60)) / 1000);
         
     document.getElementById("countdown").innerHTML = "  (" + minutes + "m " + seconds + "s)";
-        
-    // If the count down is over, write some text 
+
     if (distance < 0) {
         clearInterval(x);
-        document.getElementById("countdown").innerHTML = "EXPIRED";
+        document.getElementById("countdown").innerHTML = " ( time is up)";
     }
+        
     }, 1000);
+}
+
+function getTimerTime(startTime, endTime) {
+    if(startTime >= endTime || !endTime)
+        return lastTime + " s";
+
+    lastTime = ((endTime - startTime) / 1000);
+    
+    return lastTime + " s"; 
 }

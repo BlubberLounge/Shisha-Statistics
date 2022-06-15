@@ -2,7 +2,7 @@ th {
     width: 50%;
 }
 
-.topnav {
+nav {
     background-color: #143642;
 }
 
@@ -17,6 +17,10 @@ th {
 
 .text-white-75 {
     color: rgba(255, 255, 255, 0.75);
+}
+
+.text-c-muted {
+    color: rgba(var(--bs-body-color-rgb),.40)!important;
 }
 
 hr.divider {

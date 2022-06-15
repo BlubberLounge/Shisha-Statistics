@@ -1,68 +1,16 @@
-#include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <WiFiUdp.h>
-#include <FS.h>
-#include <LittleFS.h>
-#include <ArduinoOTA.h>
-#include <ArduinoJson.h>
+#define DEFINE_GLOBAL_VARS
+#include "blss.h"
 
-#include "credentials.h"
-
-// pin defaults
-#define SENSOR_PIN 14
-
-// for the esp32 it is best to use the ADC1: GPIO32 - GPIO39
-// https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc.html
-#ifndef BATTERY_MEASUREMENT_PIN
-  #ifdef ARDUINO_ARCH_ESP32
-    #define BATTERY_MEASUREMENT_PIN 32
-  #else //ESP8266 boards
-    #define BATTERY_MEASUREMENT_PIN A0
-  #endif
-#endif
-
-// esp32 has a 12bit adc resolution
-// esp8266 only 10bit
-#ifndef BATTERY_ADC_PRECISION
-  #ifdef ARDUINO_ARCH_ESP32
-    // 12 bits
-    #define BATTERY_ADC_PRECISION 4095.0f
-  #else
-    // 10 bits
-    #define BATTERY_ADC_PRECISION 1024.0f
-  #endif
-#endif
-
-// the frequency to check the battery, 30 sec
-#ifndef BATTERY_MEASUREMENT_INTERVAL
-  #define BATTERY_MEASUREMENT_INTERVAL 30000
-#endif
-
-// the frequency to check the Sensor, 1 sec
-#ifndef SENSOR_MEASUREMENT_INTERVAL
-  #define SENSOR_MEASUREMENT_INTERVAL 250
-#endif
-
-// default for 18650 battery
-// https://batterybro.com/blogs/18650-wholesale-battery-reviews/18852515-when-to-recycle-18650-batteries-and-how-to-start-a-collection-center-in-your-vape-shop
-// Discharge voltage: 2.5 volt + .1 for personal safety
-#ifndef BATTERY_MIN_VOLTAGE
-  #define BATTERY_MIN_VOLTAGE 2.6f
-#endif
-
-#ifndef BATTERY_MAX_VOLTAGE
-  #define BATTERY_MAX_VOLTAGE 4.2f
-#endif
-
+// ADC_MODE(ADC_VCC);
+// + ESP.getVcc();
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 uint8_t connectionCounter = 0;
+char testSSID[33];
+char testPASS[65];
 
 // battery read time
 unsigned long nextBatteryReadTime = 0;
@@ -71,16 +19,18 @@ unsigned long lastBatteryReadTime = 0;
 unsigned long nextSensorReadTime = 0;
 unsigned long lastSensorReadTime = 0;
 // timer
-unsigned long timer = 0; 
+unsigned long startTimer = 0;
+unsigned long endTimer = 0;
 // raw analog reading 
 float rawValue = 0.0;
 // calculated voltage            
 float voltage = 0.0;
+float tmpVoltage = 0.0;
 // mapped battery level based on voltage
 long batteryLevel = 0;
+bool batteryIsCharging = false;
 
 uint8_t sensorValue = 0;
-uint8_t tmpSensorValue = 0;
 bool notifyClients = false;
 
 
@@ -103,6 +53,17 @@ float truncate(float val, byte dec)
   return x;
 }
 
+/*
+ * Read all configuration from flash
+ */
+extern void loadSettingsFromEEPROM()
+{
+  readStringFromEEPROM(  0, clientSSID, 32);
+  readStringFromEEPROM( 32, clientPass, 64);
+  readStringFromEEPROM( 96,     apSSID, 32);
+  readStringFromEEPROM(160,     apPass, 64);
+}
+
 void setNotifyClients(bool notify)
 {
   if(notifyClients)
@@ -113,12 +74,18 @@ void setNotifyClients(bool notify)
 
 void notify()
 {
-  const uint8_t size = JSON_OBJECT_SIZE(5);
-  StaticJsonDocument<size> json;
-  json["battery_level"] = batteryLevel;
-  json["battery_voltage"] = voltage;
-  json["next_battery_read"] = nextBatteryReadTime;
+  StaticJsonDocument<JSON_OBJECT_SIZE(10)> json;
+
+  JsonObject battery = json.createNestedObject("battery");
+  battery["voltage"] = voltage;
+  battery["capacity"] = BATTERY_CAPACITY;
+  battery["percent"] = batteryLevel;
+  battery["isCharging"] = batteryIsCharging;
+  battery["nextRead"] = nextBatteryReadTime - millis();
+
   json["airflow"] = sensorValue;
+  json["startTimer"] = startTimer;
+  json["endTimer"] = endTimer;
   json["time"] = millis();
 
   char data[200];
@@ -156,12 +123,23 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   }
 }
 
-
 void readSensor()
 {
-  tmpSensorValue = digitalRead(SENSOR_PIN);
-  setNotifyClients(tmpSensorValue != sensorValue);
-  sensorValue = tmpSensorValue;
+  uint8_t tmpSensorValue = digitalRead(SENSOR_PIN);
+
+  if(tmpSensorValue != sensorValue) {
+
+    sensorValue = tmpSensorValue;
+
+    setNotifyClients(true);
+    
+    if(sensorValue == 1) {
+      startTimer = millis();
+    } else if(sensorValue == 0) {
+      endTimer = millis();
+    }
+
+  }
 }
 
 
@@ -171,7 +149,7 @@ void readBatteryLevel()
   rawValue = analogRead(BATTERY_MEASUREMENT_PIN);
 
   // calculate the voltage     
-  voltage = (rawValue / BATTERY_ADC_PRECISION) * BATTERY_MAX_VOLTAGE ;
+  voltage = (rawValue / BATTERY_ADC_PRECISION) * BATTERY_MAX_VOLTAGE;
   // check if voltage is within specified voltage range
   voltage = voltage < BATTERY_MIN_VOLTAGE || voltage > BATTERY_MAX_VOLTAGE ? -1.0f : voltage;
 
@@ -188,17 +166,29 @@ void readBatteryLevel()
 
 String processor(const String& var)
 {
-  return "no Data";
+  // return "no data.";
   
-  // if(var == "BATTERY_VOLTAGE") {
-  //   return String(voltage);
-  // }
-  // else if(var == "BATTERY_LEVEL") {
-  //   return String(batteryLevel);
-  // }
-  // else if(var == "AIRFLOW") {
-  //   return String(sensorValue);
-  // }
+  if(var == "BATTERY_VOLTAGE") {
+    return "0.00 v";
+  }
+  else if(var == "BATTERY_LEVEL") {
+    return "0 &#x25;";
+  }
+  else if(var == "BATTERY_CAPACITY") {
+    return String(BATTERY_CAPACITY) + "mAh (" + String((3.7f * BATTERY_CAPACITY)/1000) + " Wh)";
+  }
+  else if(var == "AIRFLOW") {
+    return String(sensorValue);
+  }
+  else if(var == "VERSION") {
+    return String(BLSS_VERSION);
+  }
+  else if(var == "ESP_CHIPID") {
+    return String(ESP.getChipId());
+  }
+  else if(var== "WIFI_MAC") {
+    return String(WiFi.macAddress());
+  }
 
   return String();
 }
@@ -213,9 +203,16 @@ void setup()
 {
   Serial.begin(115200);
   Serial.println("Booting");
+  
+  EEPROM.begin(EEPSIZE);
+  loadSettingsFromEEPROM();
+  EEPROM.end();
+
+  Serial.println("loading settings");
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(BL_SSID, BL_PASSWORD);
+  WiFi.begin(clientSSID, clientPass);
+  // WiFi.begin(BL_SSID, BL_PASSWORD);
 
   // Initialize SPIFFS
   if(!LittleFS.begin()){
@@ -225,25 +222,25 @@ void setup()
 
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
     Serial.print("Connection Failed! SSID: ");
-    Serial.println(BL_SSID);
+    Serial.println(clientSSID);
 
     if(connectionCounter >= 5) {
-      // Serial.println("Starting a Access Point...");
-      // WiFi.mode(WIFI_AP);
-      // WiFi.softAP("BlubberLounge StatTrak™");
+      Serial.println("Starting a Access Point...");
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP(apSSID);
 
       // mobilephone AP
-      WiFi.begin("MAAAAAXimum Internet", "12345678");
+      // WiFi.begin("MAAAAAXimum Internet", "12345678");
 
-      // IPAddress IP = WiFi.softAPIP();
-      // Serial.print("AP IP address: ");
-      // Serial.println(IP);
+      IPAddress IP = WiFi.softAPIP();
+      Serial.print("AP IP address: ");
+      Serial.println(IP);
       break;
       // Serial.println("Connection Failed! Rebooting...");
       // ESP.restart();
     }
 
-    delay(5000);
+    delay(2500);
     connectionCounter++;
   }
 
@@ -308,6 +305,28 @@ void setup()
   // style route
   server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/script.js", "text/javascript");
+  });
+
+  // add WiFi credentails
+  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request){
+    uint8_t code = 200;
+
+    EEPROM.begin(EEPSIZE);
+    for(uint8_t i = 0; i <= 32; i++ ) {
+      EEPROM.write(i, request->arg("ssid")[i]);
+    }
+    for(uint8_t i = 0; i <= 64; i++ ) {
+      EEPROM.write(i+32, request->arg("pass")[i]);
+    }
+    EEPROM.end();
+
+    Serial.print("SSID: ");
+    Serial.println(clientSSID);
+    Serial.print("Pass: ");
+    Serial.println(clientPass);
+
+    request->send(code, "text/html", "Restarting...");
+    // ESP.reset();
   });
 
   server.onNotFound(notFound);
