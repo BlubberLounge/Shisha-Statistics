@@ -15,6 +15,9 @@ uint8_t connectionCounter = 0;
 char testSSID[33];
 char testPASS[65];
 
+unsigned long nextLedUpdate = 100;
+unsigned long nextUpdate = 100;
+
 // battery read time
 // unsigned long nextBatteryReadTime = 0;
 // unsigned long lastBatteryReadTime = 0;
@@ -35,6 +38,17 @@ float tmpVoltage = 0.0;
 
 uint8_t sensorValue = 0;
 bool notifyClients = false;
+
+CRGBPalette16 airflowMapping;
+
+DEFINE_GRADIENT_PALETTE( airflowIndicator_gp )
+{
+    0, 255,   0, 0,
+   64, 255, 255, 0,
+  128,   0, 255, 0,
+  192, 255, 255, 0,
+  255, 255,   0, 0,
+};
 
 
 // custom map function
@@ -202,6 +216,54 @@ extern void loadSettingsFromEEPROM()
 //   request->send(404, "text/plain", "Not found");
 // }
 
+/*
+ * https://github.com/Aircoookie/WLED/blob/main/wled00/FX_fcn.cpp
+ */
+uint32_t color_wheel(uint8_t pos) {
+  pos = 255 - pos;
+  if(pos < 85) {
+    return ((uint32_t)(255 - pos * 3) << 16) | ((uint32_t)(0) << 8) | (pos * 3);
+  } else if(pos < 170) {
+    pos -= 85;
+    return ((uint32_t)(0) << 16) | ((uint32_t)(pos * 3) << 8) | (255 - pos * 3);
+  } else {
+    pos -= 170;
+    return ((uint32_t)(pos * 3) << 16) | ((uint32_t)(255 - pos * 3) << 8) | (0);
+  }
+}
+
+void example_color_wipe()
+{
+  uint32_t cycleTime = 5000; 
+  uint32_t reminder = millis() % cycleTime;
+  // uint32_t currentItteration = millis() / cycleTime;
+  uint16_t progress = (reminder*65535) / cycleTime;
+  bool back = (progress > 32767);
+
+  if(back)
+    progress -= 32767;
+
+  uint16_t ledIndex = (progress * NUM_LEDS) >> 15;
+  for(int i=0; i < NUM_LEDS; i++) {
+    uint8_t index = back ? NUM_LEDS -i : i;
+
+    if(i == ledIndex) {
+      leds[index] = back ? CRGB::Black : CRGB::Red;//color_wheel(random8());
+    }   
+  }
+
+  return;
+}
+
+void customEffect()
+{
+  CRGBPalette16 airflowMapping = airflowIndicator_gp;
+
+  for( int i = 0; i < NUM_LEDS; ++i) {
+    leds[i] = ColorFromPalette( airflowMapping, i*15, 64, LINEARBLEND);
+  }
+}
+
 void setup()
 {
   // sanity check delay - allows reprogramming if accidently blowing power w/leds
@@ -259,10 +321,12 @@ void setup()
   nextSensorReadTime = millis() + SENSOR_MEASUREMENT_INTERVAL;
   lastSensorReadTime = millis();
 
-  FastLED.setMaxPowerInVoltsAndMilliamps( 5, 500);
+  FastLED.setMaxPowerInVoltsAndMilliamps( 5, 100);
   FastLED.addLeds<WS2811, LED_PIN, GRB>(leds, NUM_LEDS)
-    .setCorrection(TypicalLEDStrip);;
+    .setCorrection(TypicalLEDStrip);
 
+
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
   // Port defaults to 8266
   // ArduinoOTA.setPort(8266);
 
@@ -356,22 +420,15 @@ void loop()
 {
   ArduinoOTA.handle();
 
-  // Move a single white led 
-  for(int i=0; i < 16; i++) {
-    // Turn our current led on to white, then show the leds
-    leds[i] = CRGB::Green;    
+  // example_color_wipe();
+  customEffect();
+
+  if (millis() >= nextLedUpdate) {
+    nextLedUpdate = millis() + 16;
+
+    FastLED.show();
   }
-
-  FastLED.show();
-  delay(500);
-
-  for(int i=0; i < 16; i++) {
-    // Turn our current led on to white, then show the leds
-    leds[i] = CRGB::Black;    
-  }
-
-  FastLED.show();
-  delay(1000);
+  
 
 
   // check the battery level every BATTERY_MEASUREMENT_INTERVAL (ms)
