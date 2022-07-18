@@ -1,12 +1,15 @@
 #ifndef BLSS_H
 #define BLSS_H
 
+
 #include <Arduino.h>
+#include <NeoPixelBus.h>
+#include <FastLED.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <ESPAsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <WiFiUdp.h>
+// #include <ESPAsyncTCP.h>
+// #include <ESPAsyncWebServer.h>
+// #include <WiFiUdp.h>
 #include <LittleFS.h>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
@@ -15,6 +18,7 @@
 #include "fcn_declare.h"
 #include "const.h"
 #include "credentials.h"
+
 
 
 
@@ -30,6 +34,14 @@
 
 #ifndef BLSS_VERSION
   #define BLSS_VERSION "dev"
+#endif
+
+#ifndef NUM_LEDS
+  #define NUM_LEDS 16
+#endif
+
+#ifndef LED_PIN
+  #define LED_PIN 2 // D4
 #endif
 
 // for the esp32 it is best to use the ADC1: GPIO32 - GPIO39
@@ -99,5 +111,6 @@ BLSS_GLOBAL char clientPass[65] _INIT(CLIENT_PASS);
 BLSS_GLOBAL char apSSID[33] _INIT("BlubberLounge StatTrak™");
 BLSS_GLOBAL char apPass[65]  _INIT(DEFAULT_AP_PASS);
 BLSS_GLOBAL char otaPass[33] _INIT(DEFAULT_OTA_PASS);
+
 
 #endif // BLSS_H
