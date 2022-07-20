@@ -8,15 +8,16 @@
 // AsyncWebServer server(80);
 // AsyncWebSocket ws("/ws");
 
-// This is an array of leds.  One item for each led in your strip.
-CRGB leds[16];
+// CRGB leds[16];
+CRGB leds[11] = {0};
 
 uint8_t connectionCounter = 0;
 char testSSID[33];
 char testPASS[65];
 
 unsigned long nextLedUpdate = 100;
-unsigned long nextUpdate = 100;
+unsigned long randAirflow = 100;
+unsigned long nextDebug = 100;
 
 // battery read time
 // unsigned long nextBatteryReadTime = 0;
@@ -39,9 +40,9 @@ float tmpVoltage = 0.0;
 uint8_t sensorValue = 0;
 bool notifyClients = false;
 
-CRGBPalette16 airflowMapping;
+bool airflow = true;
 
-DEFINE_GRADIENT_PALETTE( airflowIndicator_gp )
+DEFINE_GRADIENT_PALETTE( airflowMap_gp )
 {
     0, 255,   0, 0,
    64, 255, 255, 0,
@@ -49,6 +50,12 @@ DEFINE_GRADIENT_PALETTE( airflowIndicator_gp )
   192, 255, 255, 0,
   255, 255,   0, 0,
 };
+
+CRGBPalette16 airflowHeatmap = airflowMap_gp;
+uint32_t lastStep = 0;
+uint16_t aux0 = 0;
+uint16_t aux1 = 1;
+uint16_t aux2 = 1;
 
 
 // custom map function
@@ -232,10 +239,16 @@ uint32_t color_wheel(uint8_t pos) {
   }
 }
 
+uint16_t IRAM_ATTR triwave16(uint16_t in)
+{
+  if (in < 0x8000) return in *2;
+  return 0xFFFF - (in - 0x8000)*2;
+}
+
 void example_color_wipe()
 {
-  uint32_t cycleTime = 5000; 
-  uint32_t reminder = millis() % cycleTime;
+  uint32_t cycleTime = 5000; // how long a whole cycle takes
+  uint32_t reminder = millis() % cycleTime; // percentage of cycle
   // uint32_t currentItteration = millis() / cycleTime;
   uint16_t progress = (reminder*65535) / cycleTime;
   bool back = (progress > 32767);
@@ -255,19 +268,91 @@ void example_color_wipe()
   return;
 }
 
-void customEffect()
+void old_effect_airflow(bool airflow_)
 {
-  CRGBPalette16 airflowMapping = airflowIndicator_gp;
+  uint32_t cycleTime = 1000; // how long a whole cycle takes
+  uint32_t reminder = millis() % cycleTime; // percentage of cycle
+  uint16_t progress = (reminder << 16) / cycleTime; // (remainder * 65535) / cycleTime
+  
+  uint16_t maxWidth = 5; // in pixel
+  uint16_t centerIndex = 0; // where the effect originates from / Offset
 
-  for( int i = 0; i < NUM_LEDS; ++i) {
-    leds[i] = ColorFromPalette( airflowMapping, i*15, 64, LINEARBLEND);
+  if(!airflow_)
+    progress -= 32767;
+  
+  uint16_t ledIndex = (progress * maxWidth) >> 15;
+  
+  uint16_t rem = 0;
+  rem = (progress * maxWidth ) * 2; //mod 0xFFFF
+  rem /= (128 + 1);
+  if (rem > 255) rem = 255;
+  
+  leds[centerIndex] = ColorFromPalette( airflowHeatmap, 128, 64, LINEARBLEND);
+
+  for( int i = centerIndex + 1; i <= maxWidth; i++)
+  {
+    uint16_t index = airflow_ ? i : maxWidth - i + 1;
+    uint16_t counter = i - centerIndex;
+    uint16_t col0 =  map(counter, centerIndex, maxWidth , 192, 255);
+
+    if(i == ledIndex && aux0 == 0) {
+      leds[index] = airflow_ ? ColorFromPalette( airflowHeatmap, col0, rem, LINEARBLEND) : CRGB::Black;
+      aux1 = i;
+    }
+  }
+
+  if(ledIndex-1 == maxWidth) {
+    // aux0 = 1; // is effect done ?
+    airflow = !airflow_;
+  }
+}
+
+void effect_airflow(bool airflow_)
+{
+  uint32_t cycleTime = 5000*1.5;
+  uint32_t reminder = millis() % cycleTime;
+  uint8_t percent = (reminder * 100 ) / cycleTime;
+
+  if(!airflow_)
+    percent = 100-percent;
+
+  double np = percent/100.0;
+  uint8_t ledIndex = (-log10(airflow_?1-np:np) * 5);
+  if(millis() >= nextDebug) {
+    nextDebug = millis() + 1000;
+    Serial.print("Index  ->  ");
+    Serial.println(ledIndex);
+    Serial.print("percent %  ->  ");
+    Serial.println(percent);
+    Serial.print("isAirflow  ->  ");
+    Serial.println(airflow);
+    Serial.println("----------------------------------------");
+  }
+
+  leds[0] = ColorFromPalette( airflowHeatmap, 128, 64, LINEARBLEND);
+
+  for( int i = 0 + 1; i <= 5; i++)
+  {
+    uint16_t index = airflow_ ? i : 5 - i + 1;
+    uint16_t counter = i - 0;
+    uint16_t col0 =  map(counter, 0, 5 , 192, 255);
+
+    if(i == ledIndex && aux0 == 0) {
+      leds[index] = airflow_ ? ColorFromPalette( airflowHeatmap, col0, 64, LINEARBLEND) : CRGB::Black;
+      aux1 = i;
+    }
+  }
+
+  if(ledIndex >= 5) {
+    // aux0 = 1; // is effect done ?
+    airflow = !airflow_;
   }
 }
 
 void setup()
 {
   // sanity check delay - allows reprogramming if accidently blowing power w/leds
-  delay(2000);
+  delay(1000);
 
   Serial.begin(115200);
   Serial.println("Booting");
@@ -324,7 +409,7 @@ void setup()
   FastLED.setMaxPowerInVoltsAndMilliamps( 5, 100);
   FastLED.addLeds<WS2811, LED_PIN, GRB>(leds, NUM_LEDS)
     .setCorrection(TypicalLEDStrip);
-
+  FastLED.setBrightness(64);
 
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   // Port defaults to 8266
@@ -414,17 +499,32 @@ void setup()
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+
+  for(uint16_t i = 0; i <= 100; i++) {
+    double np = i/100.0;
+    Serial.print("Index = ");
+    Serial.print(i);
+    Serial.print(" : ");
+    Serial.print(i);
+    Serial.print("  ->  ");
+    Serial.println((uint16_t)(-log10(np) * 5));
+  }
 }
 
 void loop()
 {
   ArduinoOTA.handle();
 
+  // if (millis() >= randAirflow) {
+  //   randAirflow = millis() + random(10000);  
+  //   airflow = random(1);
+  // }
+
   // example_color_wipe();
-  customEffect();
+  effect_airflow(airflow);
 
   if (millis() >= nextLedUpdate) {
-    nextLedUpdate = millis() + 16;
+    nextLedUpdate = millis() + (60/1000);
 
     FastLED.show();
   }
